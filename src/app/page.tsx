@@ -1,65 +1,216 @@
-import Image from "next/image";
+import { Suspense } from "react";
+import { db } from "@/lib/db";
+import { MonthSelector } from "@/components/month-selector";
+import { DashboardClient } from "@/components/dashboard-client";
+import { CustomerRevenueData } from "@/app/dashboard-row";
+import {
+  calculateCustomerRevenue,
+  isCustomerActiveForMonth,
+  getCurrentMonth,
+  getMonthOptions,
+  formatCurrency,
+} from "@/lib/revenue";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-export default function Home() {
+async function getDashboardData(month: string) {
+  const [customers, payrollEntry] = await Promise.all([
+    db.customer.findMany({
+      include: {
+        pricing: true,
+        monthlyEstimates: true,
+      },
+      orderBy: { name: "asc" },
+    }),
+    db.payroll.findUnique({
+      where: { month },
+    }),
+  ]);
+
+  const revenueData: CustomerRevenueData[] = [];
+  const pricingIds: Record<string, string> = {};
+
+  for (const customer of customers) {
+    if (!isCustomerActiveForMonth(customer.status, customer.startDate, month)) {
+      continue;
+    }
+
+    const pricing = customer.pricing;
+    if (!pricing) continue;
+
+    pricingIds[customer.id] = pricing.id;
+
+    // Find estimate for this month, or use any existing estimate as baseline
+    let estimate = customer.monthlyEstimates.find((e) => e.month === month);
+    if (!estimate && customer.monthlyEstimates.length > 0) {
+      // Use the most recent estimate as baseline for future months
+      estimate = customer.monthlyEstimates.sort((a, b) => b.month.localeCompare(a.month))[0];
+    }
+    const estimatedShipments = estimate?.estimatedShipments ?? 0;
+
+    const revenue = calculateCustomerRevenue(
+      {
+        baseFee: pricing.baseFee,
+        includedShipments: pricing.includedShipments,
+        overageRate: pricing.overageRate,
+        labelFeeEnabled: pricing.labelFeeEnabled,
+        labelFeeRate: pricing.labelFeeRate,
+        labelFeePercentage: pricing.labelFeePercentage,
+      },
+      estimatedShipments
+    );
+
+    revenueData.push({
+      customerId: customer.id,
+      name: customer.name,
+      status: customer.status,
+      estimatedShipments: revenue.estimatedShipments,
+      baseFee: revenue.baseFee,
+      overageRevenue: revenue.overageRevenue,
+      labelRevenue: revenue.labelRevenue,
+      totalRevenue: revenue.totalRevenue,
+      labelFeeEnabled: pricing.labelFeeEnabled,
+      labelFeeRate: pricing.labelFeeRate,
+      labelFeePercentage: pricing.labelFeePercentage,
+    });
+  }
+
+  const totalMRR = revenueData.reduce((sum, c) => sum + c.totalRevenue, 0);
+  const payroll = payrollEntry?.amount ?? 0;
+
+  return {
+    revenueData,
+    pricingIds,
+    totalMRR,
+    payroll,
+    activeCustomers: revenueData.length,
+    customers,
+  };
+}
+
+async function get90DayProjection(customers: Awaited<ReturnType<typeof getDashboardData>>["customers"]) {
+  const monthOptions = getMonthOptions(4);
+  const projections = [];
+
+  for (const monthOption of monthOptions) {
+    const month = monthOption.value;
+    const payrollEntry = await db.payroll.findUnique({ where: { month } });
+    let monthRevenue = 0;
+
+    for (const customer of customers) {
+      if (!isCustomerActiveForMonth(customer.status, customer.startDate, month)) {
+        continue;
+      }
+
+      const pricing = customer.pricing;
+      if (!pricing) continue;
+
+      // Find estimate for this month, or use any existing estimate as baseline
+      let estimate = customer.monthlyEstimates.find((e) => e.month === month);
+      if (!estimate && customer.monthlyEstimates.length > 0) {
+        estimate = customer.monthlyEstimates.sort((a, b) => b.month.localeCompare(a.month))[0];
+      }
+      const estimatedShipments = estimate?.estimatedShipments ?? 0;
+
+      const revenue = calculateCustomerRevenue(
+        {
+          baseFee: pricing.baseFee,
+          includedShipments: pricing.includedShipments,
+          overageRate: pricing.overageRate,
+          labelFeeEnabled: pricing.labelFeeEnabled,
+          labelFeeRate: pricing.labelFeeRate,
+          labelFeePercentage: pricing.labelFeePercentage,
+        },
+        estimatedShipments
+      );
+
+      monthRevenue += revenue.totalRevenue;
+    }
+
+    projections.push({
+      month: monthOption.label,
+      revenue: monthRevenue,
+      payroll: payrollEntry?.amount ?? 0,
+      profit: monthRevenue - (payrollEntry?.amount ?? 0),
+    });
+  }
+
+  return projections;
+}
+
+interface DashboardContentProps {
+  month: string;
+}
+
+async function DashboardContent({ month }: DashboardContentProps) {
+  const data = await getDashboardData(month);
+  const projections = await get90DayProjection(data.customers);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex min-h-screen w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the page.tsx file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
+    <div className="space-y-8">
+      <DashboardClient
+        totalMRR={data.totalMRR}
+        payroll={data.payroll}
+        activeCustomers={data.activeCustomers}
+        revenueData={data.revenueData}
+        pricingIds={data.pricingIds}
+        month={month}
+      />
+
+      <div className="space-y-4">
+        <h2 className="text-lg font-semibold">90-Day Projection</h2>
+        <div className="grid gap-4 md:grid-cols-4">
+          {projections.map((p) => (
+            <Card key={p.month}>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium">{p.month}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1">
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Revenue</span>
+                  <span>{formatCurrency(p.revenue)}</span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Payroll</span>
+                  <span>{formatCurrency(p.payroll)}</span>
+                </div>
+                <div className="flex justify-between text-sm font-medium pt-1 border-t">
+                  <span>Profit</span>
+                  <span className={p.profit < 0 ? "text-destructive" : "text-green-600"}>
+                    {formatCurrency(p.profit)}
+                  </span>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={16}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+      </div>
+    </div>
+  );
+}
+
+export default async function DashboardPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ month?: string }>;
+}) {
+  const params = await searchParams;
+  const month = params.month ?? getCurrentMonth();
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold">Dashboard</h1>
+          <p className="text-muted-foreground">Revenue overview and projections</p>
         </div>
-      </main>
+        <Suspense fallback={<div className="w-[180px] h-10 bg-muted animate-pulse rounded" />}>
+          <MonthSelector currentMonth={month} />
+        </Suspense>
+      </div>
+
+      <Suspense fallback={<div className="space-y-4"><div className="h-32 bg-muted animate-pulse rounded" /></div>}>
+        <DashboardContent month={month} />
+      </Suspense>
     </div>
   );
 }
