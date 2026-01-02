@@ -2,60 +2,57 @@
 // learn more about it in the docs: https://pris.ly/d/prisma-schema
 
 generator client {
-  provider = "prisma-client"
+  provider = "prisma-client-js"
   output   = "../src/generated/prisma"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = "file:./dev.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
 model Customer {
-  id               String            @id @default(cuid())
-  name             String
-  status           String            @default("Active") // Active, Trial, Inactive
-  startDate        DateTime?
-  createdAt        DateTime          @default(now())
-  updatedAt        DateTime          @updatedAt
+  id         String    @id @default(cuid())
+  name       String
+  status     String    @default("Prospect")
+  closedDate DateTime?
+  startDate  DateTime?
+  owner      String?
+  notes      String?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
   pricing          Pricing?
   monthlyEstimates MonthlyEstimate[]
 }
 
 model Pricing {
-  id                 String   @id @default(cuid())
-  customerId         String   @unique
-  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  baseFee            Float    @default(0)
-  includedShipments  Int      @default(0)
-  overageRate        Float    @default(0)
-  labelFeeEnabled    Boolean  @default(false)
-  labelFeeRate       Float    @default(0)
-  labelFeePercentage Float    @default(1.0)
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                String  @id @default(cuid())
+  customerId        String  @unique
+  baseFee           Float   @default(0)
+  includedShipments Int     @default(0)
+  overageRate       Float   @default(0)
+  labelFeeEnabled   Boolean @default(false)
+  labelFeeRate      Float   @default(0.035)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 }
 
 model MonthlyEstimate {
-  id                 String   @id @default(cuid())
+  id                 String @id @default(cuid())
   customerId         String
-  customer           Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
-  month              String   // Format: YYYY-MM
-  estimatedShipments Int      @default(0)
-  notes              String?
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  month              String
+  estimatedShipments Int    @default(0)
+
+  customer Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@unique([customerId, month])
 }
 
 model Payroll {
-  id        String   @id @default(cuid())
-  month     String   // Format: YYYY-MM
-  amount    Float
-  notes     String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  @@unique([month])
+  id          String   @id @default(cuid())
+  personName  String
+  monthlyCost Float    @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }
