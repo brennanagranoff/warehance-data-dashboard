@@ -8,7 +8,7 @@ async function main() {
   
   if (existingCustomers > 0) {
     console.log(`Database has ${existingCustomers} customers.`);
-    console.log("No seeding needed.");
+    console.log("No seeding needed.");//
     return;
   }
 
